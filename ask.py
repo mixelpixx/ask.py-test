@@ -223,15 +223,77 @@ class Ask:
         return scrape_results
 
     def chunk_results(
-        self, scrape_results: Dict[str, str], size: int, overlap: int
+        self, scrape_results: Dict[str, str]
     ) -> Dict[str, List[str]]:
         chunking_results: Dict[str, List[str]] = {}
+        
         for url, text in scrape_results.items():
             chunks = []
-            for pos in range(0, len(text), size - overlap):
-                chunks.append(text[pos : pos + size])
+            
+            if self.chunk_config['chunk_strategy'] == 'sentence':
+                # Split by sentences using basic punctuation
+                sentences = re.split('[.!?]+', text)
+                current_chunk = []
+                current_length = 0
+                
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if len(sentence) == 0:
+                        continue
+                        
+                    if current_length + len(sentence) <= self.chunk_config['chunk_size']:
+                        current_chunk.append(sentence)
+                        current_length += len(sentence)
+                    else:
+                        if current_chunk:
+                            chunks.append(' '.join(current_chunk))
+                        current_chunk = [sentence]
+                        current_length = len(sentence)
+                
+                if current_chunk:
+                    chunks.append(' '.join(current_chunk))
+                    
+            elif self.chunk_config['chunk_strategy'] == 'paragraph':
+                # Split by paragraphs using double newlines
+                paragraphs = text.split('\n\n')
+                current_chunk = []
+                current_length = 0
+                
+                for para in paragraphs:
+                    para = para.strip()
+                    if len(para) == 0:
+                        continue
+                        
+                    if current_length + len(para) <= self.chunk_config['chunk_size']:
+                        current_chunk.append(para)
+                        current_length += len(para)
+                    else:
+                        if current_chunk:
+                            chunks.append('\n\n'.join(current_chunk))
+                        current_chunk = [para]
+                        current_length = len(para)
+                
+                if current_chunk:
+                    chunks.append('\n\n'.join(current_chunk))
+            else:  # fixed strategy
+                for pos in range(0, len(text), 
+                    self.chunk_config['chunk_size'] - self.chunk_config['chunk_overlap']):
+                    chunk = text[pos:pos + self.chunk_config['chunk_size']]
+                    if len(chunk) >= self.chunk_config['min_chunk_size']:
+                        chunks.append(chunk)
+            
+            if self.chunk_config['clean_chunks']:
+                chunks = [self._clean_chunk(chunk) for chunk in chunks]
+                
             chunking_results[url] = chunks
+            
         return chunking_results
+        
+    def _clean_chunk(self, text: str) -> str:
+        """Clean chunk text by removing extra whitespace and normalizing text"""
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        return text
 
     def get_embedding(self, client: OpenAI, texts: List[str]) -> List[List[float]]:
         if len(texts) == 0:
@@ -296,7 +358,7 @@ CREATE TABLE {table_name} (
         partial_get_embedding = partial(self.batch_get_embedding, client)
         with ThreadPoolExecutor(max_workers=10) as executor:
             all_embeddings = executor.map(partial_get_embedding, batches)
-        self.logger.info(f"âœ… Finished embedding.")
+        self.logger.info(f"Ã¢Å“â€¦ Finished embedding.")
 
         for chunk_batch, embeddings in all_embeddings:
             url = chunk_batch[0]
@@ -327,7 +389,7 @@ CREATE TABLE {table_name} (
                 WITH (metric = 'cosine');
             """
         )
-        self.logger.info(f"âœ… Created the vector index ...")
+        self.logger.info(f"Ã¢Å“â€¦ Created the vector index ...")
         self.db_con.execute(
             f"""
                 PRAGMA create_fts_index(
@@ -335,7 +397,7 @@ CREATE TABLE {table_name} (
                 );    
             """
         )
-        self.logger.info(f"âœ… Created the full text search index ...")
+        self.logger.info(f"Ã¢Å“â€¦ Created the full text search index ...")
         return table_name
 
     def vector_search(self, table_name: str, query: str) -> List[Dict[str, Any]]:
@@ -476,7 +538,7 @@ Here is the context:
                 logger.info("Searching the web ...")
                 yield "", update_logs()
                 links = self.search_web(query, date_restrict, target_site)
-                logger.info(f"âœ… Found {len(links)} links for query: {query}")
+                logger.info(f"Ã¢Å“â€¦ Found {len(links)} links for query: {query}")
                 for i, link in enumerate(links):
                     logger.debug(f"{i+1}. {link}")
                 yield "", update_logs()
@@ -486,7 +548,7 @@ Here is the context:
             logger.info("Scraping the URLs ...")
             yield "", update_logs()
             scrape_results = self.scrape_urls(links)
-            logger.info(f"âœ… Scraped {len(scrape_results)} URLs.")
+            logger.info(f"Ã¢Å“â€¦ Scraped {len(scrape_results)} URLs.")
             yield "", update_logs()
 
             logger.info("Chunking the text ...")
@@ -498,20 +560,20 @@ Here is the context:
                 total_chunks += len(chunks)
                 for i, chunk in enumerate(chunks):
                     logger.debug(f"Chunk {i+1}: {chunk}")
-            logger.info(f"âœ… Generated {total_chunks} chunks ...")
+            logger.info(f"Ã¢Å“â€¦ Generated {total_chunks} chunks ...")
             yield "", update_logs()
 
             logger.info(f"Saving {total_chunks} chunks to DB ...")
             yield "", update_logs()
             table_name = self.save_to_db(chunking_results)
-            logger.info(f"âœ… Successfully embedded and saved chunks to DB.")
+            logger.info(f"Ã¢Å“â€¦ Successfully embedded and saved chunks to DB.")
             yield "", update_logs()
 
             logger.info("Querying the vector DB to get context ...")
             matched_chunks = self.vector_search(table_name, query)
             for i, result in enumerate(matched_chunks):
                 logger.debug(f"{i+1}. {result}")
-            logger.info(f"âœ… Got {len(matched_chunks)} matched chunks.")
+            logger.info(f"Ã¢Å“â€¦ Got {len(matched_chunks)} matched chunks.")
             yield "", update_logs()
 
             logger.info("Running inference with context ...")
@@ -523,7 +585,7 @@ Here is the context:
                 output_language=output_language,
                 output_length=output_length,
             )
-            logger.info("âœ… Finished inference API call.")
+            logger.info("Ã¢Å“â€¦ Finished inference API call.")
             logger.info("Generating output ...")
             yield "", update_logs()
 
