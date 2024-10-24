@@ -107,6 +107,10 @@ class Ask:
         url_base = (
             f"https://www.googleapis.com/customsearch/v1?key={self.search_api_key}"
             f"&cx={self.search_project_id}&q={escaped_query}"
+            f"&num={self.search_config['max_results']}"
+            f"&safe={'active' if self.search_config['safe_search'] else 'off'}"
+            f"&gl={self.search_config['country_code']}"
+            f"&lr=lang_{self.search_config['language']}"
         )
         url_paras = f"&safe=active"
         if date_restrict is not None and date_restrict > 0:
@@ -153,11 +157,39 @@ class Ask:
         return found_links
 
     def _scape_url(self, url: str) -> Tuple[str, str]:
-        try:
-            response = self.session.get(url, timeout=10)
-            soup = BeautifulSoup(response.content, "lxml", from_encoding="utf-8")
+        retries = 0
+        while retries < self.extraction_config['max_retries']:
+            try:
+                response = self.session.get(url, 
+                    timeout=self.extraction_config['timeout'])
+                soup = BeautifulSoup(response.content, "lxml", from_encoding="utf-8")
 
-            body_tag = soup.body
+                # Remove unwanted elements
+                for tag in self.extraction_config['excluded_tags']:
+                    for element in soup.find_all(tag):
+                        element.decompose()
+
+                body_tag = soup.body
+                if body_tag:
+                    body_text = body_tag.get_text(separator=' ')
+                    body_text = " ".join(body_text.split()).strip()
+                    
+                    if (len(body_text) >= self.extraction_config['min_content_length'] and 
+                        len(body_text) <= self.extraction_config['max_content_length']):
+                        return url, body_text
+                    else:
+                        self.logger.warning(
+                            f"Content length ({len(body_text)}) outside bounds for url: {url}")
+                        return url, ""
+                        
+                return url, ""
+            except Exception as e:
+                retries += 1
+                if retries < self.extraction_config['max_retries']:
+                    time.sleep(self.extraction_config['retry_delay'])
+                    continue
+                self.logger.error(f"Scraping error {url}: {e}")
+                return url, ""
             if body_tag:
                 body_text = body_tag.get_text()
                 body_text = " ".join(body_text.split()).strip()
@@ -264,7 +296,7 @@ CREATE TABLE {table_name} (
         partial_get_embedding = partial(self.batch_get_embedding, client)
         with ThreadPoolExecutor(max_workers=10) as executor:
             all_embeddings = executor.map(partial_get_embedding, batches)
-        self.logger.info(f"✅ Finished embedding.")
+        self.logger.info(f"âœ… Finished embedding.")
 
         for chunk_batch, embeddings in all_embeddings:
             url = chunk_batch[0]
@@ -295,7 +327,7 @@ CREATE TABLE {table_name} (
                 WITH (metric = 'cosine');
             """
         )
-        self.logger.info(f"✅ Created the vector index ...")
+        self.logger.info(f"âœ… Created the vector index ...")
         self.db_con.execute(
             f"""
                 PRAGMA create_fts_index(
@@ -303,7 +335,7 @@ CREATE TABLE {table_name} (
                 );    
             """
         )
-        self.logger.info(f"✅ Created the full text search index ...")
+        self.logger.info(f"âœ… Created the full text search index ...")
         return table_name
 
     def vector_search(self, table_name: str, query: str) -> List[Dict[str, Any]]:
@@ -444,7 +476,7 @@ Here is the context:
                 logger.info("Searching the web ...")
                 yield "", update_logs()
                 links = self.search_web(query, date_restrict, target_site)
-                logger.info(f"✅ Found {len(links)} links for query: {query}")
+                logger.info(f"âœ… Found {len(links)} links for query: {query}")
                 for i, link in enumerate(links):
                     logger.debug(f"{i+1}. {link}")
                 yield "", update_logs()
@@ -454,7 +486,7 @@ Here is the context:
             logger.info("Scraping the URLs ...")
             yield "", update_logs()
             scrape_results = self.scrape_urls(links)
-            logger.info(f"✅ Scraped {len(scrape_results)} URLs.")
+            logger.info(f"âœ… Scraped {len(scrape_results)} URLs.")
             yield "", update_logs()
 
             logger.info("Chunking the text ...")
@@ -466,20 +498,20 @@ Here is the context:
                 total_chunks += len(chunks)
                 for i, chunk in enumerate(chunks):
                     logger.debug(f"Chunk {i+1}: {chunk}")
-            logger.info(f"✅ Generated {total_chunks} chunks ...")
+            logger.info(f"âœ… Generated {total_chunks} chunks ...")
             yield "", update_logs()
 
             logger.info(f"Saving {total_chunks} chunks to DB ...")
             yield "", update_logs()
             table_name = self.save_to_db(chunking_results)
-            logger.info(f"✅ Successfully embedded and saved chunks to DB.")
+            logger.info(f"âœ… Successfully embedded and saved chunks to DB.")
             yield "", update_logs()
 
             logger.info("Querying the vector DB to get context ...")
             matched_chunks = self.vector_search(table_name, query)
             for i, result in enumerate(matched_chunks):
                 logger.debug(f"{i+1}. {result}")
-            logger.info(f"✅ Got {len(matched_chunks)} matched chunks.")
+            logger.info(f"âœ… Got {len(matched_chunks)} matched chunks.")
             yield "", update_logs()
 
             logger.info("Running inference with context ...")
@@ -491,7 +523,7 @@ Here is the context:
                 output_language=output_language,
                 output_length=output_length,
             )
-            logger.info("✅ Finished inference API call.")
+            logger.info("âœ… Finished inference API call.")
             logger.info("Generating output ...")
             yield "", update_logs()
 
