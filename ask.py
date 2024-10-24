@@ -358,7 +358,7 @@ CREATE TABLE {table_name} (
         partial_get_embedding = partial(self.batch_get_embedding, client)
         with ThreadPoolExecutor(max_workers=10) as executor:
             all_embeddings = executor.map(partial_get_embedding, batches)
-        self.logger.info(f"Ã¢Å“â€¦ Finished embedding.")
+        self.logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Finished embedding.")
 
         for chunk_batch, embeddings in all_embeddings:
             url = chunk_batch[0]
@@ -389,7 +389,7 @@ CREATE TABLE {table_name} (
                 WITH (metric = 'cosine');
             """
         )
-        self.logger.info(f"Ã¢Å“â€¦ Created the vector index ...")
+        self.logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Created the vector index ...")
         self.db_con.execute(
             f"""
                 PRAGMA create_fts_index(
@@ -397,18 +397,43 @@ CREATE TABLE {table_name} (
                 );    
             """
         )
-        self.logger.info(f"Ã¢Å“â€¦ Created the full text search index ...")
+        self.logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Created the full text search index ...")
         return table_name
 
     def vector_search(self, table_name: str, query: str) -> List[Dict[str, Any]]:
         client = self._get_api_client()
         embeddings = self.get_embedding(client, [query])[0]
 
+        # Apply vector search configuration
+        similarity_threshold = self.vector_config['similarity_threshold']
+        max_results = self.vector_config['max_results']
+        distance_metric = self.vector_config['distance_metric']
+        diversity_weight = self.vector_config['diversity_weight']
+
+        # Build the vector search query with configurable parameters
         query_result: duckdb.DuckDBPyRelation = self.db_con.sql(
             f"""
-            SELECT * FROM {table_name} 
-            ORDER BY array_distance(vec, {embeddings}::FLOAT[{self.embedding_dimensions}]) 
-            LIMIT 10;         
+            WITH ranked_results AS (
+                SELECT 
+                    *,
+                    array_distance(vec, {embeddings}::FLOAT[{self.embedding_dimensions}], 
+                                 '{distance_metric}') as distance,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY url 
+                        ORDER BY array_distance(vec, 
+                            {embeddings}::FLOAT[{self.embedding_dimensions}], 
+                            '{distance_metric}')
+                    ) as diversity_rank
+                FROM {table_name}
+                WHERE array_distance(vec, 
+                    {embeddings}::FLOAT[{self.embedding_dimensions}], 
+                    '{distance_metric}') <= {similarity_threshold}
+            )
+            SELECT *
+            FROM ranked_results
+            WHERE diversity_rank <= CEIL({diversity_weight} * {max_results})
+            ORDER BY distance
+            LIMIT {max_results};         
         """
         )
 
@@ -440,8 +465,17 @@ CREATE TABLE {table_name} (
         output_language: str,
         output_length: int,
     ) -> str:
+        # Apply LLM configuration
+        temperature = self.llm_config['temperature']
+        top_p = self.llm_config['top_p']
+        frequency_penalty = self.llm_config['frequency_penalty']
+        presence_penalty = self.llm_config['presence_penalty']
+        max_tokens = self.llm_config['max_tokens']
+        stream = self.llm_config['stream']
+
         system_prompt = (
-            "You are an expert summarizing the answers based on the provided contents."
+            "You are an expert summarizing the answers based on the provided contents. "
+            "Focus on accuracy and clarity in your responses."
         )
         user_promt_template = """
 Given the context as a sequence of references with a reference id in the 
@@ -538,7 +572,7 @@ Here is the context:
                 logger.info("Searching the web ...")
                 yield "", update_logs()
                 links = self.search_web(query, date_restrict, target_site)
-                logger.info(f"Ã¢Å“â€¦ Found {len(links)} links for query: {query}")
+                logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Found {len(links)} links for query: {query}")
                 for i, link in enumerate(links):
                     logger.debug(f"{i+1}. {link}")
                 yield "", update_logs()
@@ -548,7 +582,7 @@ Here is the context:
             logger.info("Scraping the URLs ...")
             yield "", update_logs()
             scrape_results = self.scrape_urls(links)
-            logger.info(f"Ã¢Å“â€¦ Scraped {len(scrape_results)} URLs.")
+            logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Scraped {len(scrape_results)} URLs.")
             yield "", update_logs()
 
             logger.info("Chunking the text ...")
@@ -560,20 +594,20 @@ Here is the context:
                 total_chunks += len(chunks)
                 for i, chunk in enumerate(chunks):
                     logger.debug(f"Chunk {i+1}: {chunk}")
-            logger.info(f"Ã¢Å“â€¦ Generated {total_chunks} chunks ...")
+            logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Generated {total_chunks} chunks ...")
             yield "", update_logs()
 
             logger.info(f"Saving {total_chunks} chunks to DB ...")
             yield "", update_logs()
             table_name = self.save_to_db(chunking_results)
-            logger.info(f"Ã¢Å“â€¦ Successfully embedded and saved chunks to DB.")
+            logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Successfully embedded and saved chunks to DB.")
             yield "", update_logs()
 
             logger.info("Querying the vector DB to get context ...")
             matched_chunks = self.vector_search(table_name, query)
             for i, result in enumerate(matched_chunks):
                 logger.debug(f"{i+1}. {result}")
-            logger.info(f"Ã¢Å“â€¦ Got {len(matched_chunks)} matched chunks.")
+            logger.info(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Got {len(matched_chunks)} matched chunks.")
             yield "", update_logs()
 
             logger.info("Running inference with context ...")
@@ -585,7 +619,7 @@ Here is the context:
                 output_language=output_language,
                 output_length=output_length,
             )
-            logger.info("Ã¢Å“â€¦ Finished inference API call.")
+            logger.info("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Finished inference API call.")
             logger.info("Generating output ...")
             yield "", update_logs()
 
